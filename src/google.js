@@ -9,6 +9,49 @@ async function token(env){if(cache?.until>Date.now())return cache.value;let k;tr
 async function google(env,url,payload){const r=await fetch(url,{method:payload?'POST':'GET',headers:{authorization:'Bearer '+await token(env),...(payload?{'content-type':'application/json'}:{})},...(payload?{body:JSON.stringify(payload)}:{}),signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('Google API HTTP '+r.status+'; check enabled APIs and service account permissions');return r.json();}
 async function property(env){const site=new URL(env.SITE_URL||'https://www.coditation.com/').hostname.replace(/^www\./,'');const entries=(await google(env,'https://www.googleapis.com/webmasters/v3/sites')).siteEntry||[];const matches=entries.filter(x=>x.permissionLevel!=='siteUnverifiedUser'&&(x.siteUrl==='sc-domain:'+site||x.siteUrl==='https://'+site+'/'||x.siteUrl==='https://www.'+site+'/'));const chosen=env.GSC_SITE_URL?matches.find(x=>x.siteUrl===env.GSC_SITE_URL):matches[0];if(!chosen)throw Error('No accessible Search Console property for the service account');return chosen.siteUrl;}
 export async function googleStatus(env){let last=null;try{last=await env.DB.prepare('SELECT * FROM google_sync_runs ORDER BY started_at DESC LIMIT 1').first();}catch{}return {configured:!!env.GOOGLE_SERVICE_ACCOUNT_JSON,searchConsole:env.GOOGLE_SERVICE_ACCOUNT_JSON?'configured':'not connected',gaPropertyConfigured:!!env.GA4_PROPERTY_ID,last};}
-export async function syncGoogle(env){if(!/^\d+$/.test(String(env.GA4_PROPERTY_ID||'')))throw Error('Configure numeric GA4_PROPERTY_ID');const prop=await property(env),win=reportingWindow(),id=crypto.randomUUID(),ga='https://analyticsdata.googleapis.com/v1beta/properties/'+env.GA4_PROPERTY_ID+':runReport',gsc='https://www.googleapis.com/webmasters/v3/sites/'+encodeURIComponent(prop)+'/searchAnalytics/query';await env.DB.prepare('INSERT INTO google_sync_runs(id,gsc_property,ga_property,start_date,end_date,status) VALUES(?,?,?,?,?,?)').bind(id,prop,env.GA4_PROPERTY_ID,win.start,win.end,'running').run();let sc=0,ac=0;try{for(const kind of ['query','page','date']){let offset=0;while(offset<10000){const data=await google(env,gsc,{startDate:win.start,endDate:win.end,dimensions:[kind],rowLimit:1000,startRow:offset});for(const row of data.rows||[]){await env.DB.prepare('INSERT OR REPLACE INTO google_search_metrics(start_date,end_date,kind,key_value,clicks,impressions,ctr,position) VALUES(?,?,?,?,?,?,?,?)').bind(win.start,win.end,kind,kind==='page'?canonicalUrl(row.keys[0],env.SITE_URL):row.keys[0],row.clicks||0,row.impressions||0,row.ctr||0,row.position||0).run();sc++;}if((data.rows||[]).length<1000)break;offset+=1000;}}for(const [kind,dimension] of [['page','landingPagePlusQueryString'],['date','date']]){let offset=0;while(offset<10000){const data=await google(env,ga,{dateRanges:[{startDate:win.start,endDate:win.end}],dimensions:[{name:dimension}],metrics:['sessions','engagedSessions','activeUsers','keyEvents'].map(name=>({name})),dimensionFilter:{filter:{fieldName:'sessionDefaultChannelGroup',stringFilter:{value:'Organic Search'}}},limit:1000,offset:String(offset)});for(const row of data.rows||[]){const key=kind==='page'?canonicalUrl(row.dimensionValues[0].value,env.SITE_URL):row.dimensionValues[0].value;if(!key)continue;const m=row.metricValues.map(x=>Number(x.value)||0);await env.DB.prepare('INSERT OR REPLACE INTO google_analytics_metrics(start_date,end_date,kind,key_value,sessions,engaged_sessions,active_users,key_events) VALUES(?,?,?,?,?,?,?,?)').bind(win.start,win.end,kind,key,...m).run();ac++;}if((data.rows||[]).length<1000)break;offset+=1000;}}await env.DB.prepare("UPDATE google_sync_runs SET status='completed',gsc_rows=?,ga_rows=?,finished_at=CURRENT_TIMESTAMP WHERE id=?").bind(sc,ac,id).run();return {id,status:'completed',gsc_rows:sc,ga_rows:ac};}catch(e){await env.DB.prepare("UPDATE google_sync_runs SET status='failed',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?").bind(String(e.message).slice(0,300),id).run();throw e;}}
+async function writeBatch(env,statements){for(let i=0;i<statements.length;i+=40)await env.DB.batch(statements.slice(i,i+40));}
+export async function syncGoogle(env){
+ if(!/^\d+$/.test(String(env.GA4_PROPERTY_ID||'')))throw Error('Configure numeric GA4_PROPERTY_ID');
+ const prop=await property(env),win=reportingWindow(),id=crypto.randomUUID();
+ const ga='https://analyticsdata.googleapis.com/v1beta/properties/'+env.GA4_PROPERTY_ID+':runReport';
+ const gsc='https://www.googleapis.com/webmasters/v3/sites/'+encodeURIComponent(prop)+'/searchAnalytics/query';
+ await env.DB.prepare('INSERT INTO google_sync_runs(id,gsc_property,ga_property,start_date,end_date,status) VALUES(?,?,?,?,?,?)').bind(id,prop,env.GA4_PROPERTY_ID,win.start,win.end,'running').run();
+ let sc=0,ac=0;
+ try{
+  for(const kind of ['query','page','date']){
+   for(let offset=0;offset<3000;offset+=1000){
+    const data=await google(env,gsc,{startDate:win.start,endDate:win.end,dimensions:[kind],rowLimit:1000,startRow:offset});
+    const statements=[];
+    for(const row of data.rows||[]){
+     const key=kind==='page'?canonicalUrl(row.keys?.[0],env.SITE_URL):row.keys?.[0];
+     if(!key)continue;
+     statements.push(env.DB.prepare('INSERT OR REPLACE INTO google_search_metrics(start_date,end_date,kind,key_value,clicks,impressions,ctr,position) VALUES(?,?,?,?,?,?,?,?)').bind(win.start,win.end,kind,key,row.clicks||0,row.impressions||0,row.ctr||0,row.position||0));
+    }
+    await writeBatch(env,statements);sc+=statements.length;
+    if((data.rows||[]).length<1000)break;
+   }
+  }
+  for(const [kind,dimension] of [['page','landingPagePlusQueryString'],['date','date']]){
+   const aggregated=new Map();
+   for(let offset=0;offset<3000;offset+=1000){
+    const data=await google(env,ga,{dateRanges:[{startDate:win.start,endDate:win.end}],dimensions:[{name:dimension},{name:'sessionDefaultChannelGroup'}],metrics:['sessions','engagedSessions','activeUsers','keyEvents'].map(name=>({name})),dimensionFilter:{filter:{fieldName:'sessionDefaultChannelGroup',stringFilter:{value:'Organic Search'}}},limit:1000,offset:String(offset)});
+    for(const row of data.rows||[]){
+     const key=kind==='page'?canonicalUrl(row.dimensionValues[0].value,env.SITE_URL):row.dimensionValues[0].value;
+     if(!key)continue;
+     const prev=aggregated.get(key)||[0,0,0,0],values=row.metricValues.map(x=>Number(x.value)||0);
+     aggregated.set(key,prev.map((n,i)=>n+(values[i]||0)));
+    }
+    if((data.rows||[]).length<1000)break;
+   }
+   const statements=[...aggregated.entries()].map(([key,metrics])=>env.DB.prepare('INSERT OR REPLACE INTO google_analytics_metrics(start_date,end_date,kind,key_value,sessions,engaged_sessions,active_users,key_events) VALUES(?,?,?,?,?,?,?,?)').bind(win.start,win.end,kind,key,...metrics));
+   await writeBatch(env,statements);ac+=statements.length;
+  }
+  await env.DB.prepare("UPDATE google_sync_runs SET status='completed',gsc_rows=?,ga_rows=?,finished_at=CURRENT_TIMESTAMP WHERE id=?").bind(sc,ac,id).run();
+  return {id,status:'completed',gsc_rows:sc,ga_rows:ac};
+ }catch(e){
+  await env.DB.prepare("UPDATE google_sync_runs SET status='failed',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?").bind(String(e.message).slice(0,300),id).run();
+  throw e;
+ }
+}
 export async function googleReport(env){const last=await env.DB.prepare("SELECT * FROM google_sync_runs WHERE status='completed' ORDER BY finished_at DESC LIMIT 1").first();if(!last)return {last:null,queries:[],pages:[],analytics:[],opportunities:[]};const args=[last.start_date,last.end_date];const q=async(table,kind)=> (await env.DB.prepare('SELECT * FROM '+table+' WHERE start_date=? AND end_date=? AND kind=? ORDER BY '+(table==='google_search_metrics'?'impressions':'sessions')+' DESC LIMIT 100').bind(...args,kind).all()).results;const queries=await q('google_search_metrics','query'),pages=await q('google_search_metrics','page'),analytics=await q('google_analytics_metrics','page');return {last,queries,pages,analytics,...buildSeoInsights(pages,analytics)};}
 export async function inspectGoogleUrl(env,value){const url=canonicalUrl(value,env.SITE_URL);if(!url)throw Error('Only HTTPS URLs for the configured site are allowed');const prop=await property(env);const data=await google(env,'https://searchconsole.googleapis.com/v1/urlInspection/index:inspect',{inspectionUrl:url,siteUrl:prop,languageCode:'en-US'});const x=data.inspectionResult?.indexStatusResult||{};await env.DB.prepare('INSERT OR REPLACE INTO google_url_inspections(url,property,verdict,coverage_state,indexing_state,last_crawl_time,google_canonical,user_canonical,fetched_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(url,prop,x.verdict||'UNKNOWN',x.coverageState||'',x.indexingState||'',x.lastCrawlTime||'',x.googleCanonical||'',x.userCanonical||'',new Date().toISOString()).run();return {url,...x};}
