@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "coditation-seo-intelligence",
+  "name": "coditation-seo-intelligence", 
   "main": "src/worker.js",
   "observability": {
     "enabled": false
