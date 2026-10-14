@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "coditation-seo-db",
-      "database_id": "REPLACE_WITH_REAL_DATABASE_ID",
+      "database_id": "0d92c8af-da55-4030-850c-92f30819de90",
       "migrations_dir": "migrations"
     }
   ],
