@@ -1,0 +1,1 @@
+Google integrations rollout: configure the service account in Cloudflare secrets; apply the D1 migration after reviewing the PR.
