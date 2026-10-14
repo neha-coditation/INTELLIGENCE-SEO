@@ -1,48 +1,23 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "coditation-seo-intelligence",
-  "main": "src/worker.js",
+  // ...
   "observability": {
     "enabled": false,
     "head_sampling_rate": 1,
     "redact_query_string": false,
     "logs": {
-      "enabled": true,
+      "enabled": false,
       "head_sampling_rate": 1,
       "invocation_logs": true,
       "persist": true
     },
     "traces": {
-      "enabled": true,
+      "enabled": false,
       "head_sampling_rate": 1,
       "persist": true
     },
-    "issues": {
-      "enabled": true
+    "issue_detection": {
+      "enabled": false
     }
   },
-  "compatibility_date": "2026-10-13",
-  "assets": {
-    "directory": "./public",
-    "binding": "ASSETS",
-    "run_worker_first": true
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "coditation-seo-db",
-      "database_id": "0d92c8af-da55-4030-850c-92f30819de90",
-      "migrations_dir": "migrations"
-    }
-  ],
-  "vars": {
-    "SITE_URL": "https://www.coditation.com/",
-    "MAX_PAGES": "40"
-  },
-  "triggers": {
-    "crons": [
-      "30 3 * * 1",
-      "0 */2 * * *"
-    ]
-  }
+  // ...
 }
