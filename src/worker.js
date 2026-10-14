@@ -1,5 +1,6 @@
 import { pageUrl, externalSource, sameSiteHost, sameDestination, inspectPage, parseSitemap, cleanText } from './checks.js';
 import { extractHtml } from './html.js';
+import {googleStatus,syncGoogle,googleReport,inspectGoogleUrl} from './google.js';
 
 const JSON_HEADERS={ 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store', 'x-robots-tag':'noindex, nofollow', 'x-content-type-options':'nosniff' };
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:JSON_HEADERS});
@@ -199,6 +200,10 @@ function csvCell(v){return '"'+String(v??'').replace(/"/g,'""')+'"';}
 function toCsv(rows,fields){return [fields.join(','),...rows.map(x=>fields.map(f=>csvCell(x[f])).join(','))].join('\r\n');}
 async function api(request,env){
   const url=new URL(request.url),path=url.pathname,method=request.method;
+  if(method==='GET'&&path==='/api/google/status')return json(await googleStatus(env));
+  if(method==='GET'&&path==='/api/google/report')return json(await googleReport(env));
+  if(method==='POST'&&path==='/api/google/sync')return json(await syncGoogle(env));
+  if(method==='POST'&&path==='/api/google/inspect'){const b=await body(request);return json(await inspectGoogleUrl(env,b.url));}
   if(method==='GET'&&path==='/api/summary')return json(await summary(env));
   if(method==='GET'&&path==='/api/runs')return json((await env.DB.prepare('SELECT * FROM runs ORDER BY created_at DESC LIMIT 50').all()).results);
   if(method==='POST'&&path==='/api/runs'){
