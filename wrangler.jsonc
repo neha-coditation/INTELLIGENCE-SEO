@@ -3,7 +3,11 @@
   "name": "coditation-seo-intelligence", 
   "main": "src/worker.js",
   "observability": {
-    "enabled": false
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "persist": true
+    }
   },
   "compatibility_date": "2026-10-13",
   "assets": {
