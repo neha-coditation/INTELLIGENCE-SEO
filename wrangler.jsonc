@@ -2,6 +2,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "coditation-seo-intelligence",
   "main": "src/worker.js",
+  "observability": {
+    "enabled": false
+  },
   "compatibility_date": "2026-10-13",
   "assets": {
     "directory": "./public",
