@@ -17,10 +17,7 @@
       "migrations_dir": "migrations"
     }
   ],
-  "vars": {
-    "SITE_URL": "https://www.coditation.com/",
-    "MAX_PAGES": "40"
-  },
+  
   "triggers": {
     "crons": [
       "30 3 * * 1",
