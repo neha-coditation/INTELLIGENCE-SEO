@@ -64,9 +64,10 @@ async function discover(base,host,max) {
   const urls=[...new Set(candidates.map(x=>pageUrl(x,base,host)).filter(x=>x&&robotsAllowed(robots,x)))].slice(0,max);
   return {robots,urls:urls.length?urls:[base]};
 }
-async function startRun(env,source='manual',requestedLimit=null){
-  const {base,host,max}=cfg(env);
-  const active=await env.DB.prepare("SELECT id FROM runs WHERE status='running' ORDER BY created_at DESC LIMIT 1").first();
+async function startRun(env,source='manual',requestedLimit=null,siteOrigin=null){
+  const selected=siteOrigin?new URL(siteOrigin):new URL(env.SITE_URL||'https://www.coditation.com/');
+  const base=selected.origin+'/',host=selected.hostname,max=Math.min(75,Math.max(5,Number(env.MAX_PAGES)||40));
+  const active=await env.DB.prepare("SELECT id FROM runs WHERE status='running' AND site=? ORDER BY created_at DESC LIMIT 1").bind(base).first();
   if(active)return {id:active.id,reused:true};
   const limit=Math.min(max,Math.max(5,Number(requestedLimit)||max));
   const id=uid();
@@ -87,7 +88,7 @@ async function saveIssues(env,runId,url,items){
     .bind(uid(),runId,url,i.code,i.severity,cleanText(i.evidence,800),i.advice).run();
 }
 async function checkPage(env,run,item){
-  const {host,base}=cfg(env);let p={url:item.url,status_code:0,final_url:'', title:'',description:'',canonical:'',h1:'',h1_count:0,image_count:0,image_alt_missing:0,jsonld_count:0,og_title:'',og_image:'',robots:'',lang:''};
+  const {host,base}={host:new URL(run.site).hostname,base:run.site};let p={url:item.url,status_code:0,final_url:'', title:'',description:'',canonical:'',h1:'',h1_count:0,image_count:0,image_alt_missing:0,jsonld_count:0,og_title:'',og_image:'',robots:'',lang:''};
   let issues=[];let internal=[];
   try{
     if(!robotsAllowed(run.robots_text,item.url)){
@@ -199,6 +200,11 @@ function csvCell(v){return '"'+String(v??'').replace(/"/g,'""')+'"';}
 function toCsv(rows,fields){return [fields.join(','),...rows.map(x=>fields.map(f=>csvCell(x[f])).join(','))].join('\r\n');}
 async function api(request,env){
   const url=new URL(request.url),path=url.pathname,method=request.method;
+  if(method==='GET'&&path==='/api/sites')return json((await env.DB.prepare('SELECT id,name,origin,enabled,created_at FROM monitored_sites ORDER BY created_at DESC LIMIT 100').all()).results);
+  if(method==='POST'&&path==='/api/sites'){const b=await body(request);let parsed;try{parsed=new URL(b.url);}catch{return err('Valid HTTPS website URL required');}if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.port||parsed.pathname!=='/'||parsed.search||parsed.hash||!parsed.hostname.includes('.')||/^(localhost|.*\\.local|.*\\.internal)$/i.test(parsed.hostname)||/^(127\\.|10\\.|192\\.168\\.|169\\.254\\.|0\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)/.test(parsed.hostname))return err('Public HTTPS website origin required');const origin=parsed.origin+'/';const name=String(b.name||parsed.hostname).trim().slice(0,80);await env.DB.prepare('INSERT OR IGNORE INTO monitored_sites(id,name,origin) VALUES(?,?,?)').bind(uid(),name,origin).run();return json({origin,added:true},201);}
+  if(method==='GET'&&path==='/api/sites/runs'){const origin=url.searchParams.get('site');if(!origin)return err('site required');return json((await env.DB.prepare('SELECT id,site,status,max_pages,created_at,completed_at FROM runs WHERE site=? ORDER BY created_at DESC LIMIT 25').bind(origin).all()).results);}
+  if(method==='POST'&&path==='/api/sites/audit'){const b=await body(request);const site=await env.DB.prepare('SELECT origin FROM monitored_sites WHERE id=? AND enabled=1').bind(String(b.site_id||'')).first();if(!site)return err('Select a registered website');return json(await startRun(env,'manual',b.max_pages,site.origin),201);}
+
   if(method==='GET'&&path==='/api/summary')return json(await summary(env));
   if(method==='GET'&&path==='/api/runs')return json((await env.DB.prepare('SELECT * FROM runs ORDER BY created_at DESC LIMIT 50').all()).results);
   if(method==='POST'&&path==='/api/runs'){
