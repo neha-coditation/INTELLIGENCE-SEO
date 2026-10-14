@@ -1,12 +1,24 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "coditation-seo-intelligence", 
+  "name": "coditation-seo-intelligence",
   "main": "src/worker.js",
   "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "redact_query_string": false,
     "logs": {
       "enabled": true,
+      "head_sampling_rate": 1,
       "invocation_logs": true,
       "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    },
+    "issues": {
+      "enabled": true
     }
   },
   "compatibility_date": "2026-10-13",
@@ -27,5 +39,10 @@
     "SITE_URL": "https://www.coditation.com/",
     "MAX_PAGES": "40"
   },
-  "triggers": { "crons": ["30 3 * * 1", "0 */2 * * *"] }
+  "triggers": {
+    "crons": [
+      "30 3 * * 1",
+      "0 */2 * * *"
+    ]
+  }
 }
